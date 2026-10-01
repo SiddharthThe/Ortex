@@ -1,11 +1,56 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
-type Platform = "auto" | "chatgpt" | "claude" | "gemini"
+import type {
+  GetPlatformStateRequest,
+  PlatformStateResponse,
+  SupportedPlatform
+} from "./src/types"
+
+/** Local union for the transfer-context dropdowns (includes "auto"). */
+type TransferPlatform = "auto" | SupportedPlatform
+
+/** Maps a platform key to a display-friendly label. */
+const PLATFORM_LABELS: Record<SupportedPlatform, string> = {
+  chatgpt: "ChatGPT",
+  claude: "Claude",
+  gemini: "Gemini"
+}
 
 function IndexPopup() {
-  const [source, setSource] = useState<Platform>("auto")
-  const [destination, setDestination] = useState<Platform>("chatgpt")
+  const [source, setSource] = useState<TransferPlatform>("auto")
+  const [destination, setDestination] = useState<TransferPlatform>("chatgpt")
   const [mode, setMode] = useState<"full" | "smart" | "summary">("smart")
+
+  // Platform detection state
+  const [detectedPlatform, setDetectedPlatform] =
+    useState<SupportedPlatform | null>(null)
+  const [platformLoading, setPlatformLoading] = useState<boolean>(true)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const request: GetPlatformStateRequest = { type: "GET_PLATFORM_STATE" }
+
+    chrome.runtime
+      .sendMessage<GetPlatformStateRequest, PlatformStateResponse>(request)
+      .then((response) => {
+        if (!cancelled) {
+          setDetectedPlatform(response?.platform ?? null)
+          setPlatformLoading(false)
+        }
+      })
+      .catch(() => {
+        // Service worker may not be ready yet — fail gracefully
+        if (!cancelled) {
+          setDetectedPlatform(null)
+          setPlatformLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   return (
     <div
@@ -72,31 +117,10 @@ function IndexPopup() {
       <div style={sectionStyle}>
         <label style={labelStyle}>CURRENT PLATFORM</label>
 
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "10px",
-            background: "#171a23",
-            border: "1px solid #252938",
-            borderRadius: "10px",
-            padding: "12px"
-          }}
-        >
-          <span
-            style={{
-              width: "9px",
-              height: "9px",
-              borderRadius: "50%",
-              background: "#737373",
-              display: "inline-block"
-            }}
-          />
-
-          <span style={{ fontSize: "13px", color: "#c9ceda" }}>
-            Detecting platform...
-          </span>
-        </div>
+        <PlatformStatus
+          loading={platformLoading}
+          platform={detectedPlatform}
+        />
       </div>
 
       {/* Conversation */}
@@ -144,7 +168,7 @@ function IndexPopup() {
 
           <select
             value={source}
-            onChange={(e) => setSource(e.target.value as Platform)}
+            onChange={(e) => setSource(e.target.value as TransferPlatform)}
             style={selectStyle}
           >
             <option value="auto">Auto Detect</option>
@@ -161,7 +185,7 @@ function IndexPopup() {
           <select
             value={destination}
             onChange={(e) =>
-              setDestination(e.target.value as Platform)
+              setDestination(e.target.value as TransferPlatform)
             }
             style={selectStyle}
           >
@@ -308,9 +332,67 @@ function Stat({
   )
 }
 
+/**
+ * PlatformStatus — shows current detection result in the popup.
+ * Intentionally minimal for Milestone 1; will be extended later.
+ */
+function PlatformStatus({
+  loading,
+  platform
+}: {
+  loading: boolean
+  platform: import("./src/types").SupportedPlatform | null
+}) {
+  const dotColor = loading ? "#555d70" : platform ? "#22c55e" : "#737373"
+
+  const label = loading
+    ? "Detecting platform..."
+    : platform
+      ? `${PLATFORM_LABELS[platform]} detected`
+      : "No supported platform detected"
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "10px",
+        background: "#171a23",
+        border: platform ? "1px solid #166534" : "1px solid #252938",
+        borderRadius: "10px",
+        padding: "12px",
+        transition: "border-color 0.2s"
+      }}
+    >
+      <span
+        style={{
+          width: "9px",
+          height: "9px",
+          borderRadius: "50%",
+          background: dotColor,
+          display: "inline-block",
+          flexShrink: 0,
+          boxShadow: platform ? "0 0 6px #22c55e88" : "none",
+          transition: "background 0.2s, box-shadow 0.2s"
+        }}
+      />
+
+      <span
+        style={{
+          fontSize: "13px",
+          color: platform ? "#86efac" : "#c9ceda"
+        }}
+      >
+        {label}
+      </span>
+    </div>
+  )
+}
+
 const sectionStyle = {
   marginBottom: "18px"
 }
+
 
 const labelStyle = {
   display: "block",

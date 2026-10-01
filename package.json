@@ -24,6 +24,9 @@
     "typescript": "5.3.3"
   },
   "manifest": {
+    "action": {
+      "default_popup": "popup.html"
+    },
     "host_permissions": [
       "https://*/*"
     ]
