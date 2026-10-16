@@ -50,6 +50,8 @@ const LOG_PREFIX = "[Ortex/ChatGPT]"
 const SELECTORS = {
   /** Container that holds all conversation turns */
   conversationContainer: [
+    "main [data-message-author-role='user']",
+    "main [data-message-author-role='assistant']",
     "[data-testid^='conversation-turn']",
     "article[data-testid]",
     "[data-message-id]"
@@ -58,9 +60,11 @@ const SELECTORS = {
   /** The prose/text content area within a turn */
   messageContent: [
     ".markdown.prose",
+    ".markdown",
     "[data-message-content]",
     ".text-message",
-    ".whitespace-pre-wrap"
+    ".whitespace-pre-wrap",
+    "[class*='whitespace-pre-wrap']"
   ],
 
   /** User turn indicators */
@@ -88,6 +92,17 @@ const SELECTORS = {
   /** Page title fallback candidates */
   pageTitle: ["title", "h1"]
 } as const
+
+const NOISE_TEXT_PATTERNS = [
+  /^copy$/i,
+  /^share$/i,
+  /^regenerate$/i,
+  /^read aloud$/i,
+  /^convert to pdf$/i,
+  /^good response$/i,
+  /^bad response$/i,
+  /^thumbs? (up|down)$/i
+]
 
 // ---------------------------------------------------------------------------
 // Adapter
@@ -163,6 +178,120 @@ function queryAll(
   return []
 }
 
+function isVisibleElement(element: Element): boolean {
+  const rects = element.getClientRects()
+  return rects.length > 0
+}
+
+function hasInteractiveAncestor(element: Element): boolean {
+  return (
+    element.closest(
+      "button, nav, form, header, footer, aside, input, textarea, select, option, [role='button'], [contenteditable='true']"
+    ) !== null
+  )
+}
+
+function isLikelyNoiseElement(element: Element): boolean {
+  const text = extractText(element).trim()
+  if (!text) return true
+  if (text.length < 2) return true
+  if (!/[A-Za-z0-9\u00C0-\u024F\u0400-\u04FF]/.test(text)) return true
+  if (NOISE_TEXT_PATTERNS.some((pattern) => pattern.test(text))) return true
+  if (hasInteractiveAncestor(element)) return true
+  const label = `${element.getAttribute("aria-label") ?? ""} ${
+    element.getAttribute("data-testid") ?? ""
+  }`.toLowerCase()
+  if (/toolbar|menu|button|share|copy|regenerate|feedback|action/.test(label))
+    return true
+  return false
+}
+
+function collectFallbackBlocks(): Element[] {
+  const selectors = [
+    "main article",
+    "main [role='article']",
+    "main [data-testid]",
+    "main [dir='auto']",
+    "main p",
+    "main pre",
+    "main li"
+  ]
+
+  const unique = new Set<Element>()
+  const candidates: Element[] = []
+
+  for (const selector of selectors) {
+    let elements: Element[]
+    try {
+      elements = Array.from(document.querySelectorAll(selector))
+    } catch {
+      continue
+    }
+
+    for (const element of elements) {
+      if (unique.has(element)) continue
+      if (!isVisibleElement(element)) continue
+      if (isLikelyNoiseElement(element)) continue
+      unique.add(element)
+      candidates.push(element)
+    }
+  }
+
+  const topLevel = candidates.filter((candidate) => {
+    return !candidates.some(
+      (other) => other !== candidate && other.contains(candidate)
+    )
+  })
+
+  return topLevel.sort((a, b) => {
+    const position = a.compareDocumentPosition(b)
+    if (position & Node.DOCUMENT_POSITION_FOLLOWING) return -1
+    if (position & Node.DOCUMENT_POSITION_PRECEDING) return 1
+    return 0
+  })
+}
+
+/**
+ * Return message candidates in document order. Current ChatGPT builds have
+ * used both role-bearing message nodes and wrapper elements around them, so
+ * extraction must not depend on one specific turn test id.
+ */
+function findMessageCandidates(): Element[] {
+  const selectors = [
+    "main [data-message-author-role='user']",
+    "main [data-message-author-role='assistant']",
+    "main [data-message-id]",
+    "main [data-testid^='conversation-turn']",
+    "main article",
+    "[data-message-author-role='user']",
+    "[data-message-author-role='assistant']",
+    "[data-message-id]",
+    "[data-testid^='conversation-turn']"
+  ]
+  const candidates: Element[] = []
+  const seen = new Set<Element>()
+
+  for (const selector of selectors) {
+    let elements: Element[]
+    try {
+      elements = Array.from(document.querySelectorAll(selector))
+    } catch {
+      continue
+    }
+
+    for (const element of elements) {
+      if (seen.has(element)) continue
+      seen.add(element)
+      candidates.push(element)
+    }
+  }
+
+  return candidates.sort((a, b) => {
+    const position = a.compareDocumentPosition(b)
+    return position & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1
+  })
+}
+
 /**
  * Extract clean text from a content element.
  * Converts <br> and block-level elements to newlines, strips other HTML.
@@ -179,7 +308,17 @@ function extractText(element: Element): string {
     const tag = (el as Element).tagName.toLowerCase()
 
     // Skip buttons, links that look like action elements, SVG, etc.
-    if (["button", "svg", "script", "style"].includes(tag)) return ""
+    if (
+      [
+        "button",
+        "svg",
+        "script",
+        "style",
+        "nav",
+        "form"
+      ].includes(tag)
+    )
+      return ""
 
     const children = Array.from(el.childNodes).map(walk).join("")
 
@@ -212,9 +351,22 @@ function extractText(element: Element): string {
  */
 function detectTurnRole(turn: Element): "user" | "assistant" | null {
   // Strategy 1: data-message-author-role attribute on a descendant
-  const authorRoleEl = turn.querySelector("[data-message-author-role]")
+  const authorRoleEl =
+    turn.closest("[data-message-author-role]") ??
+    turn.querySelector("[data-message-author-role]")
   if (authorRoleEl) {
     const role = authorRoleEl.getAttribute("data-message-author-role")
+    if (role === "user" || role === "assistant") return role
+  }
+
+  const ownRole = turn.getAttribute("data-message-author-role")
+  if (ownRole === "user" || ownRole === "assistant") return ownRole
+
+  const roleElements = Array.from(
+    turn.querySelectorAll("[data-message-author-role]")
+  )
+  for (const roleElement of roleElements) {
+    const role = roleElement.getAttribute("data-message-author-role")
     if (role === "user" || role === "assistant") return role
   }
 
@@ -229,6 +381,18 @@ function detectTurnRole(turn: Element): "user" | "assistant" | null {
   const ariaLabel = turn.getAttribute("aria-label") ?? ""
   if (/you said|your message/i.test(ariaLabel)) return "user"
   if (/chatgpt|assistant|response/i.test(ariaLabel)) return "assistant"
+
+  const text = `${turn.getAttribute("data-testid") ?? ""} ${
+    turn.className
+  }`.toLowerCase()
+  if (/\b(user|human)\b/.test(text)) return "user"
+  if (/\b(assistant|bot|model)\b/.test(text)) return "assistant"
+
+  const ancestorRole = turn.closest("[data-message-author-role]")
+  if (ancestorRole) {
+    const role = ancestorRole.getAttribute("data-message-author-role")
+    if (role === "user" || role === "assistant") return role
+  }
 
   return null
 }
@@ -249,6 +413,9 @@ function extractTurnId(turn: Element, index: number): string {
     const id = withMessageId.getAttribute("data-message-id")
     if (id) return id
   }
+
+  const testId = turn.getAttribute("data-testid")
+  if (testId) return testId
 
   // Fallback to position-based
   return `chatgpt-turn-${index}`
@@ -278,16 +445,31 @@ function extractTitle(): string | undefined {
 function extractConversation(): Conversation {
   const now = Date.now()
 
-  // Find all conversation turn elements
-  const turns = queryAll(document, SELECTORS.conversationContainer)
+  const explicitTurns = findMessageCandidates()
+  const turns = explicitTurns.length > 0 ? explicitTurns : collectFallbackBlocks()
 
   const messages: Message[] = []
   const seenIds = new Set<string>()
+  const seenContent = new Set<string>()
+  let fallbackRole: "assistant" | "user" = "assistant"
 
   for (let i = 0; i < turns.length; i++) {
     const turn = turns[i]
 
-    const role = detectTurnRole(turn)
+    let role = detectTurnRole(turn)
+    if (!role && explicitTurns.length === 0) {
+      const rect = turn.getBoundingClientRect()
+      const style = window.getComputedStyle(turn)
+      const align = `${style.textAlign} ${style.justifyContent} ${
+        style.alignItems
+      } ${style.alignSelf}`.toLowerCase()
+      const rightAligned =
+        rect.right > window.innerWidth * 0.5 ||
+        /right|flex-end|end/.test(align)
+      role = rightAligned ? "user" : fallbackRole
+      fallbackRole = role === "assistant" ? "user" : "assistant"
+    }
+
     if (!role) continue // Skip turns we can't classify
 
     // Find the actual text content within the turn
@@ -299,8 +481,9 @@ function extractConversation(): Conversation {
     const id = extractTurnId(turn, i)
 
     // De-duplicate by id
-    if (seenIds.has(id)) continue
+    if (seenIds.has(id) || seenContent.has(`${role}:${content}`)) continue
     seenIds.add(id)
+    seenContent.add(`${role}:${content}`)
 
     messages.push({
       id,
@@ -568,7 +751,7 @@ function initialize(): void {
 // Plasmo injects the content script after DOM is ready (document_idle).
 initialize()
 
-window.addEventListener("unload", () => {
+window.addEventListener("pagehide", () => {
   stopObserver()
 })
 
