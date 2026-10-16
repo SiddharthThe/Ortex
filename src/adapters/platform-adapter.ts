@@ -9,7 +9,7 @@
  * detection only (Milestone 1).
  */
 
-import type { SupportedPlatform } from "../types"
+import type { SupportedPlatform } from "~src/types"
 
 /**
  * Result returned by an adapter's detect() method.

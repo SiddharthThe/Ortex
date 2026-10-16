@@ -3,8 +3,8 @@
  *
  * Handles detection of the ChatGPT web interface.
  *
- * MILESTONE 1: Detection only.
- * Conversation extraction and context injection are not yet implemented.
+ * MILESTONE 2: Detection only (extraction is handled directly in the
+ * content script to keep DOM logic colocated with where it runs).
  *
  * Detection strategy:
  *   Primary   - hostname match (chat.openai.com or chatgpt.com)
@@ -15,7 +15,7 @@
  * is designed to fall back gracefully rather than throw.
  */
 
-import type { DetectionResult, PlatformAdapter } from "./platform-adapter"
+import type { DetectionResult, PlatformAdapter } from "~src/adapters/platform-adapter"
 
 /**
  * Known stable hostnames for the ChatGPT web interface.

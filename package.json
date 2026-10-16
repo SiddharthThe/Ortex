@@ -1,13 +1,14 @@
 {
   "name": "Ortex",
   "displayName": "Ortex",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Cross-platform context synchronization and orchestration for web-based LLM interfaces.",
   "author": "Siddharth Vhatkar",
   "scripts": {
     "dev": "plasmo dev",
     "build": "plasmo build",
-    "package": "plasmo package"
+    "package": "plasmo package",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "plasmo": "0.90.5",
@@ -27,8 +28,13 @@
     "action": {
       "default_popup": "popup.html"
     },
+    "permissions": [
+      "tabs",
+      "storage"
+    ],
     "host_permissions": [
-      "https://*/*"
+      "https://chat.openai.com/*",
+      "https://chatgpt.com/*"
     ]
   }
 }
